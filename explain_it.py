@@ -137,12 +137,28 @@ topic_type = st.selectbox(
      "Academic paper", "Email / memo", "Policy document", "Medical report", "Something else"]
 )
 
-text_input = st.text_area(
-    "",
-    placeholder="Paste your text here — as long as you want...",
-    height=200,
-    label_visibility="collapsed"
+uploaded_file = st.file_uploader(
+    "Upload a file (PDF or Word doc)",
+    type=["pdf", "docx"]
 )
+
+if uploaded_file:
+    import fitz
+    import docx as docxlib
+    if uploaded_file.type == "application/pdf":
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        text_input = "\n".join(page.get_text() for page in doc)
+    else:
+        doc = docxlib.Document(uploaded_file)
+        text_input = "\n".join(p.text for p in doc.paragraphs)
+    st.success(f"File loaded: {uploaded_file.name}")
+else:
+    text_input = st.text_area(
+        "",
+        placeholder="Or paste your text here...",
+        height=200,
+        label_visibility="collapsed"
+    )
 
 level = st.radio(
     "Explain it like I'm a...",
