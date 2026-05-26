@@ -14,7 +14,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 #MainMenu, footer, header { visibility: hidden; }
 .stApp { background: #f8f9ff; }
 [data-testid="stSidebar"] { display: none; }
-
 .hero { text-align: center; padding: 40px 0 28px 0; }
 .hero h1 { font-size: 2.4rem; font-weight: 800; color: #1a1a2e; margin: 0; }
 .hero .sub { color: #6b7280; font-size: 0.92rem; margin: 8px 0 0 0; }
@@ -92,6 +91,14 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border-radius: 10px !important;
 }
 hr { border-color: #e5e7eb !important; }
+.stTabs [data-baseweb="tab-list"] {
+    gap: 24px;
+    padding: 0 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    padding: 8px 20px !important;
+    font-weight: 600 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
