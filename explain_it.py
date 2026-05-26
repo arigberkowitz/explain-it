@@ -51,6 +51,15 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .question-item { font-size: 0.9rem; color: #1e40af; padding: 5px 0;
     border-bottom: 1px solid #bfdbfe; line-height: 1.5; }
 .question-item:last-child { border-bottom: none; }
+.actions-box {
+    background: #f0fdf4; border: 1px solid #86efac; border-left: 4px solid #22c55e;
+    border-radius: 10px; padding: 16px; margin-top: 12px;
+}
+.actions-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #15803d; margin-bottom: 10px; }
+.action-item { font-size: 0.9rem; color: #166534; padding: 5px 0;
+    border-bottom: 1px solid #86efac; line-height: 1.5; }
+.action-item:last-child { border-bottom: none; }
 .tldr-box {
     background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px;
     padding: 14px 16px; margin-top: 12px; font-size: 0.9rem;
@@ -66,7 +75,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 14px 16px; margin-top: 12px; font-size: 0.88rem;
     color: #4c1d95; line-height: 1.8;
 }
-.history-meta { font-size: 0.78rem; color: #9ca3af; margin-top: 3px; }
 .upload-primary {
     background: white; border: 2px dashed #c4b5fd; border-radius: 16px;
     padding: 32px; text-align: center; margin-bottom: 16px;
@@ -96,6 +104,7 @@ hr { border-color: #e5e7eb !important; }
 if "history" not in st.session_state:
     st.session_state.history = []
 
+# ── AI functions ──────────────────────────────────────────────────────────────
 def explain(text, level, topic_type):
     level_prompts = {
         "5-year-old": "Explain this like I am 5 years old. Use super simple words, fun analogies, and short sentences.",
@@ -147,7 +156,7 @@ Find 3-5 specific flags, risks, concerns, or notable things depending on the doc
 - For financial reports: risks, red flags, concerning trends
 - For news/articles: bias, missing context, claims to verify
 - For emails/memos: tone issues, unclear asks, potential problems
-- For medical reports: things to ask the doctor, concerning findings, follow-up needed
+- For medical reports: things to ask the doctor, concerning findings
 - For anything else: the most important things to be aware of
 
 Make each point specific to the actual content. Start each with ⚠️
@@ -176,7 +185,7 @@ def get_questions(text, topic_type):
 CONTENT:
 {text[:3000]}
 
-Give them exactly 3 smart, specific questions they should ask or think about based on this content:
+Give them exactly 3 smart, specific questions they should ask or think about:
 - For contracts: questions to ask before signing
 - For resumes: questions for an interview or self-reflection
 - For financial reports: questions for an investor or analyst
@@ -185,10 +194,45 @@ Give them exactly 3 smart, specific questions they should ask or think about bas
 - For medical reports: questions to ask the doctor
 - For anything else: the most useful follow-up questions
 
-Make them specific to the actual content, not generic.
+Make them specific to the actual content.
 
 Return ONLY a JSON array:
 ["Question 1?", "Question 2?", "Question 3?"]"""
+    try:
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=20
+        )
+        txt = r.json()["content"][0]["text"].strip()
+        start, end = txt.find("["), txt.rfind("]")
+        if start != -1 and end != -1:
+            return json.loads(txt[start:end+1])
+        return []
+    except:
+        return []
+
+def get_action_items(text, topic_type):
+    prompt = f"""You are an expert advisor. Someone just read this {topic_type}.
+
+CONTENT:
+{text[:3000]}
+
+Give them exactly 3 concrete, specific action items — things they should actually DO:
+- For contracts/legal: specific steps before signing or after
+- For resumes: specific improvements to make
+- For financial reports: specific things to research or act on
+- For news/articles: specific things to verify or follow up on
+- For emails/memos: specific things to do before responding
+- For medical reports: specific things to do before the next appointment
+- For anything else: the 3 most useful next steps
+
+Make them specific to the actual content. Start each with a verb.
+
+Return ONLY a JSON array:
+["Action item 1", "Action item 2", "Action item 3"]"""
     try:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -220,12 +264,12 @@ def parse_response(text):
 st.markdown("""
 <div class="hero">
     <h1>📋 ClearSign</h1>
-    <div class="sub">Paste any document — understand it instantly, spot the risks, know what to ask</div>
-    <div class="badge">✓ Red flag detection &nbsp;·&nbsp; ✓ Questions to ask &nbsp;·&nbsp; ✓ Save history</div>
+    <div class="sub">Paste any document — understand it instantly, spot the risks, know what to do next</div>
+    <div class="badge">✓ Red flags &nbsp;·&nbsp; ✓ Questions to ask &nbsp;·&nbsp; ✓ Action items &nbsp;·&nbsp; ✓ Compare docs</div>
 </div>
 """, unsafe_allow_html=True)
 
-tabs = st.tabs(["📄 Analyze", "🕘 History"])
+tabs = st.tabs(["📄 Analyze", "🔀 Compare", "🕘 History"])
 
 # ── TAB 1: Analyze ────────────────────────────────────────────────────────────
 with tabs[0]:
@@ -276,6 +320,7 @@ with tabs[0]:
 
     show_flags     = st.checkbox("🚩 Detect red flags & things to watch out for", value=True)
     show_questions = st.checkbox("❓ Show questions to ask", value=True)
+    show_actions   = st.checkbox("✅ Show action items — what to do next", value=True)
 
     if st.button("📋 Analyze Document"):
         if not text_input.strip():
@@ -285,6 +330,7 @@ with tabs[0]:
                 raw       = explain(text_input, level, topic_type)
                 flags     = detect_red_flags(text_input, topic_type) if show_flags else []
                 questions = get_questions(text_input, topic_type) if show_questions else []
+                actions   = get_action_items(text_input, topic_type) if show_actions else []
 
             if not raw:
                 st.error("Something went wrong — try again.")
@@ -294,6 +340,7 @@ with tabs[0]:
                 st.session_state.level     = level
                 st.session_state.flags     = flags
                 st.session_state.questions = questions
+                st.session_state.actions   = actions
 
                 st.session_state.history.insert(0, {
                     "id": datetime.now().strftime("%Y%m%d%H%M%S"),
@@ -303,6 +350,7 @@ with tabs[0]:
                     "result": result,
                     "flags": flags,
                     "questions": questions,
+                    "actions": actions,
                     "level": level,
                 })
                 st.session_state.history = st.session_state.history[:10]
@@ -312,6 +360,7 @@ with tabs[0]:
         level     = st.session_state.level
         flags     = st.session_state.get("flags", [])
         questions = st.session_state.get("questions", [])
+        actions   = st.session_state.get("actions", [])
 
         level_colors = {
             "5-year-old":      ("#fef3c7", "#92400e", "👶"),
@@ -347,6 +396,14 @@ with tabs[0]:
                 {items_html}
             </div>""", unsafe_allow_html=True)
 
+        if actions:
+            items_html = "".join([f'<div class="action-item">✅ {a}</div>' for a in actions])
+            st.markdown(f"""
+            <div class="actions-box">
+                <div class="actions-title">✅ Action Items — What To Do Next</div>
+                {items_html}
+            </div>""", unsafe_allow_html=True)
+
         if s.get("ANALOGY"):
             st.markdown(f'<div class="analogy-box">🔍 <strong>Analogy:</strong> {s["ANALOGY"]}</div>', unsafe_allow_html=True)
 
@@ -355,13 +412,89 @@ with tabs[0]:
             st.markdown(f'<div class="vocab-box">📖 <strong>Key Terms:</strong><br><br>{terms_html}</div>', unsafe_allow_html=True)
 
         st.divider()
+
+        if st.button("📤 Copy summary"):
+            summary_text = f"📋 ClearSign Analysis\n\n"
+            summary_text += f"TL;DR: {s.get('TL;DR', '')}\n\n"
+            if flags:
+                summary_text += "🚩 Things to Watch Out For:\n" + "\n".join(flags) + "\n\n"
+            if questions:
+                summary_text += "❓ Questions to Ask:\n" + "\n".join(questions) + "\n\n"
+            if actions:
+                summary_text += "✅ Action Items:\n" + "\n".join(actions)
+            st.code(summary_text, language=None)
+            st.caption("Select all and copy 👆")
+
         if st.button("🔄 Analyze something else"):
-            for key in ["result", "level", "flags", "questions"]:
+            for key in ["result", "level", "flags", "questions", "actions"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
-# ── TAB 2: History ────────────────────────────────────────────────────────────
+# ── TAB 2: Compare ────────────────────────────────────────────────────────────
 with tabs[1]:
+    st.markdown("### 🔀 Compare Two Documents")
+    st.caption("Paste two documents side by side to see how they differ.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Document A**")
+        doc_a = st.text_area("", placeholder="Paste first document here...", height=250, key="doc_a")
+    with col2:
+        st.markdown("**Document B**")
+        doc_b = st.text_area("", placeholder="Paste second document here...", height=250, key="doc_b")
+
+    if st.button("🔀 Compare Documents"):
+        if not doc_a.strip() or not doc_b.strip():
+            st.error("Paste both documents first.")
+        else:
+            with st.spinner("Comparing..."):
+                try:
+                    prompt = f"""Compare these two documents and highlight the key differences.
+
+DOCUMENT A:
+{doc_a[:2000]}
+
+DOCUMENT B:
+{doc_b[:2000]}
+
+Return ONLY a JSON object:
+{{
+  "summary": "One sentence on the overall difference",
+  "doc_a_advantages": ["advantage 1", "advantage 2", "advantage 3"],
+  "doc_b_advantages": ["advantage 1", "advantage 2", "advantage 3"],
+  "key_differences": ["difference 1", "difference 2", "difference 3", "difference 4", "difference 5"]
+}}"""
+                    r = requests.post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
+                        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 600,
+                              "messages": [{"role": "user", "content": prompt}]},
+                        timeout=25
+                    )
+                    txt = r.json()["content"][0]["text"].strip()
+                    start, end = txt.find("{"), txt.rfind("}")
+                    comp = json.loads(txt[start:end+1])
+
+                    st.markdown(f"**Overall:** {comp.get('summary', '')}")
+                    st.divider()
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("**✅ Doc A has:**")
+                        for a in comp.get("doc_a_advantages", []):
+                            st.markdown(f"- {a}")
+                    with c2:
+                        st.markdown("**✅ Doc B has:**")
+                        for b in comp.get("doc_b_advantages", []):
+                            st.markdown(f"- {b}")
+                    st.divider()
+                    st.markdown("**Key differences:**")
+                    for d in comp.get("key_differences", []):
+                        st.markdown(f"- {d}")
+                except:
+                    st.error("Could not compare — try again.")
+
+# ── TAB 3: History ────────────────────────────────────────────────────────────
+with tabs[2]:
     if not st.session_state.history:
         st.info("No history yet — analyze a document to see it saved here.")
     else:
@@ -385,6 +518,10 @@ with tabs[1]:
                         st.markdown("**❓ Questions:**")
                         for q in item["questions"]:
                             st.markdown(f"- {q}")
+                    if item.get("actions"):
+                        st.markdown("**✅ Action Items:**")
+                        for a in item["actions"]:
+                            st.markdown(f"- {a}")
             with col_delete:
                 if st.button("✕", key=f"del_{item['id']}_{i}"):
                     st.session_state.history.pop(i)
