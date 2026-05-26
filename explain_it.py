@@ -438,10 +438,43 @@ with tabs[1]:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Document A**")
-        doc_a = st.text_area("", placeholder="Paste first document here...", height=250, key="doc_a")
+        file_a = st.file_uploader("Upload Doc A", type=["pdf", "docx"], key="file_a")
+        doc_a = ""
+        if file_a:
+            try:
+                if file_a.type == "application/pdf":
+                    import fitz
+                    d = fitz.open(stream=file_a.read(), filetype="pdf")
+                    doc_a = "\n".join(page.get_text() for page in d)
+                else:
+                    import docx as docxlib
+                    d = docxlib.Document(file_a)
+                    doc_a = "\n".join(p.text for p in d.paragraphs)
+                st.success(f"✅ {file_a.name}")
+            except:
+                st.error("Could not read file.")
+        else:
+            doc_a = st.text_area("Or paste text", placeholder="Paste first document here...", height=180, key="doc_a")
+
     with col2:
         st.markdown("**Document B**")
-        doc_b = st.text_area("", placeholder="Paste second document here...", height=250, key="doc_b")
+        file_b = st.file_uploader("Upload Doc B", type=["pdf", "docx"], key="file_b")
+        doc_b = ""
+        if file_b:
+            try:
+                if file_b.type == "application/pdf":
+                    import fitz
+                    d = fitz.open(stream=file_b.read(), filetype="pdf")
+                    doc_b = "\n".join(page.get_text() for page in d)
+                else:
+                    import docx as docxlib
+                    d = docxlib.Document(file_b)
+                    doc_b = "\n".join(p.text for p in d.paragraphs)
+                st.success(f"✅ {file_b.name}")
+            except:
+                st.error("Could not read file.")
+        else:
+            doc_b = st.text_area("Or paste text", placeholder="Paste second document here...", height=180, key="doc_b")
 
     if st.button("🔀 Compare Documents"):
         if not doc_a.strip() or not doc_b.strip():
