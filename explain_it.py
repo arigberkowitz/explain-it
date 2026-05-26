@@ -75,12 +75,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 14px 16px; margin-top: 12px; font-size: 0.88rem;
     color: #4c1d95; line-height: 1.8;
 }
-.upload-primary {
-    background: white; border: 2px dashed #c4b5fd; border-radius: 16px;
-    padding: 32px; text-align: center; margin-bottom: 16px;
-}
-.upload-primary h3 { color: #1a1a2e; font-size: 1.1rem; font-weight: 700; margin-bottom: 4px; }
-.upload-primary p { color: #9ca3af; font-size: 0.85rem; }
 .stButton > button {
     background: #6366f1 !important; color: white !important;
     border: none !important; border-radius: 10px !important;
@@ -281,12 +275,7 @@ with tabs[0]:
          "Resume / profile", "News article", "Something else"]
     )
 
-    st.markdown("""
-    <div class="upload-primary">
-        <h3>📎 Upload your document</h3>
-        <p>PDF or Word doc — drag and drop or click to browse</p>
-    </div>
-    """, unsafe_allow_html=True)
+   
 
     uploaded_file = st.file_uploader("", type=["pdf", "docx"], label_visibility="collapsed")
 
