@@ -274,14 +274,17 @@ with tabs[0]:
         index=2
     )
 
+    show_flags     = st.checkbox("🚩 Detect red flags & things to watch out for", value=True)
+    show_questions = st.checkbox("❓ Show questions to ask", value=True)
+
     if st.button("📋 Analyze Document"):
         if not text_input.strip():
             st.error("Upload a file or paste some text first.")
         else:
             with st.spinner("Analyzing your document..."):
                 raw       = explain(text_input, level, topic_type)
-                flags     = detect_red_flags(text_input, topic_type)
-                questions = get_questions(text_input, topic_type)
+                flags     = detect_red_flags(text_input, topic_type) if show_flags else []
+                questions = get_questions(text_input, topic_type) if show_questions else []
 
             if not raw:
                 st.error("Something went wrong — try again.")
