@@ -23,7 +23,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     border: 1px solid #86efac; border-radius: 999px;
     font-size: 0.75rem; font-weight: 600; padding: 4px 12px; margin-top: 10px;
 }
-
 .result-card {
     background: white; border: 1px solid #e5e7eb; border-radius: 16px;
     padding: 28px; margin-top: 20px;
@@ -34,7 +33,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     letter-spacing: 1px; margin-bottom: 12px;
 }
 .result-text { font-size: 1.05rem; line-height: 1.75; color: #1a1a2e; }
-
 .redflag-box {
     background: #fff1f2; border: 1px solid #fecdd3; border-left: 4px solid #f43f5e;
     border-radius: 10px; padding: 16px; margin-top: 12px;
@@ -44,7 +42,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .redflag-item { font-size: 0.9rem; color: #881337; padding: 5px 0;
     border-bottom: 1px solid #fecdd3; line-height: 1.5; }
 .redflag-item:last-child { border-bottom: none; }
-
 .questions-box {
     background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #3b82f6;
     border-radius: 10px; padding: 16px; margin-top: 12px;
@@ -54,7 +51,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .question-item { font-size: 0.9rem; color: #1e40af; padding: 5px 0;
     border-bottom: 1px solid #bfdbfe; line-height: 1.5; }
 .question-item:last-child { border-bottom: none; }
-
 .tldr-box {
     background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px;
     padding: 14px 16px; margin-top: 12px; font-size: 0.9rem;
@@ -70,22 +66,13 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 14px 16px; margin-top: 12px; font-size: 0.88rem;
     color: #4c1d95; line-height: 1.8;
 }
-
-.history-card {
-    background: white; border: 1px solid #e5e7eb; border-radius: 12px;
-    padding: 16px 20px; margin-bottom: 10px; cursor: pointer;
-}
-.history-card:hover { border-color: #6366f1; }
-.history-title { font-size: 0.92rem; font-weight: 600; color: #1a1a2e; }
 .history-meta { font-size: 0.78rem; color: #9ca3af; margin-top: 3px; }
-
 .upload-primary {
     background: white; border: 2px dashed #c4b5fd; border-radius: 16px;
     padding: 32px; text-align: center; margin-bottom: 16px;
 }
 .upload-primary h3 { color: #1a1a2e; font-size: 1.1rem; font-weight: 700; margin-bottom: 4px; }
 .upload-primary p { color: #9ca3af; font-size: 0.85rem; }
-
 .stButton > button {
     background: #6366f1 !important; color: white !important;
     border: none !important; border-radius: 10px !important;
@@ -106,11 +93,9 @@ hr { border-color: #e5e7eb !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Session state ─────────────────────────────────────────────────────────────
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# ── AI functions ──────────────────────────────────────────────────────────────
 def explain(text, level, topic_type):
     level_prompts = {
         "5-year-old": "Explain this like I am 5 years old. Use super simple words, fun analogies, and short sentences.",
@@ -138,7 +123,6 @@ TL;DR:
 
 KEY TERMS:
 [3-5 key terms, format: **word** — definition]"""
-
     try:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -152,19 +136,24 @@ KEY TERMS:
         return None
 
 def detect_red_flags(text, topic_type):
-    prompt = f"""You are a legal and contract expert. Analyze this {topic_type} for red flags.
+    prompt = f"""You are an expert analyst. Analyze this {topic_type} and find things the person should be aware of, watch out for, or question.
 
 CONTENT:
 {text[:3000]}
 
-Find 3-5 specific red flags, risky clauses, or unusual terms the person should know about.
-Each one should be a specific warning about something in the actual text.
+Find 3-5 specific flags, risks, concerns, or notable things depending on the document type:
+- For contracts/legal docs: risky clauses, unusual terms, things that could hurt them
+- For resumes/profiles: gaps, weaknesses, things to improve
+- For financial reports: risks, red flags, concerning trends
+- For news/articles: bias, missing context, claims to verify
+- For emails/memos: tone issues, unclear asks, potential problems
+- For medical reports: things to ask the doctor, concerning findings, follow-up needed
+- For anything else: the most important things to be aware of
 
-Return ONLY a JSON array like this:
-["⚠️ Specific warning about clause X", "⚠️ This clause means Y", "⚠️ Watch out for Z"]
+Make each point specific to the actual content. Start each with ⚠️
 
-If this is not a legal/contract document, return an empty array: []"""
-
+Return ONLY a JSON array:
+["⚠️ Specific point 1", "⚠️ Specific point 2", "⚠️ Specific point 3"]"""
     try:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -174,22 +163,32 @@ If this is not a legal/contract document, return an empty array: []"""
             timeout=20
         )
         txt = r.json()["content"][0]["text"].strip()
-        return json.loads(txt)
+        start, end = txt.find("["), txt.rfind("]")
+        if start != -1 and end != -1:
+            return json.loads(txt[start:end+1])
+        return []
     except:
         return []
 
 def get_questions(text, topic_type):
-    prompt = f"""You are an expert advisor. Someone is reviewing this {topic_type}.
+    prompt = f"""You are an expert advisor. Someone just read this {topic_type}.
 
 CONTENT:
 {text[:3000]}
 
-Give them exactly 3 smart questions they should ask before signing or acting on this document.
-Make them specific to the actual content.
+Give them exactly 3 smart, specific questions they should ask or think about based on this content:
+- For contracts: questions to ask before signing
+- For resumes: questions for an interview or self-reflection
+- For financial reports: questions for an investor or analyst
+- For news/articles: questions to dig deeper or verify
+- For emails/memos: questions to clarify before responding
+- For medical reports: questions to ask the doctor
+- For anything else: the most useful follow-up questions
+
+Make them specific to the actual content, not generic.
 
 Return ONLY a JSON array:
 ["Question 1?", "Question 2?", "Question 3?"]"""
-
     try:
         r = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -199,7 +198,10 @@ Return ONLY a JSON array:
             timeout=20
         )
         txt = r.json()["content"][0]["text"].strip()
-        return json.loads(txt)
+        start, end = txt.find("["), txt.rfind("]")
+        if start != -1 and end != -1:
+            return json.loads(txt[start:end+1])
+        return []
     except:
         return []
 
@@ -218,7 +220,7 @@ def parse_response(text):
 st.markdown("""
 <div class="hero">
     <h1>📋 ClearSign</h1>
-    <div class="sub">Paste any contract, legal doc, or confusing document — understand it in seconds</div>
+    <div class="sub">Paste any document — understand it instantly, spot the risks, know what to ask</div>
     <div class="badge">✓ Red flag detection &nbsp;·&nbsp; ✓ Questions to ask &nbsp;·&nbsp; ✓ Save history</div>
 </div>
 """, unsafe_allow_html=True)
@@ -231,10 +233,10 @@ with tabs[0]:
         "What are you analyzing?",
         ["Contract", "Legal document", "Lease agreement", "Employment offer",
          "Earnings report", "Financial report", "Academic paper",
-         "Email / memo", "Policy document", "Medical report", "Something else"]
+         "Email / memo", "Policy document", "Medical report",
+         "Resume / profile", "News article", "Something else"]
     )
 
-    # PDF upload as primary
     st.markdown("""
     <div class="upload-primary">
         <h3>📎 Upload your document</h3>
@@ -261,7 +263,7 @@ with tabs[0]:
     else:
         text_input = st.text_area(
             "Or paste text directly",
-            placeholder="Paste your contract, legal document, or any confusing text here...",
+            placeholder="Paste your document, contract, article, email, or any text here...",
             height=180,
         )
 
@@ -272,30 +274,26 @@ with tabs[0]:
         index=2
     )
 
-    is_legal = topic_type in ["Contract", "Legal document", "Lease agreement", "Employment offer", "Policy document"]
-    show_flags = st.checkbox("🚩 Detect red flags", value=is_legal)
-    show_questions = st.checkbox("❓ Show questions to ask", value=is_legal)
-
     if st.button("📋 Analyze Document"):
         if not text_input.strip():
             st.error("Upload a file or paste some text first.")
         else:
             with st.spinner("Analyzing your document..."):
-                raw = explain(text_input, level, topic_type)
-                flags = detect_red_flags(text_input, topic_type) if show_flags else []
-                questions = get_questions(text_input, topic_type) if show_questions else []
+                raw       = explain(text_input, level, topic_type)
+                flags     = detect_red_flags(text_input, topic_type)
+                questions = get_questions(text_input, topic_type)
 
             if not raw:
                 st.error("Something went wrong — try again.")
             else:
                 result = parse_response(raw)
-                st.session_state.result = result
-                st.session_state.level = level
-                st.session_state.flags = flags
+                st.session_state.result    = result
+                st.session_state.level     = level
+                st.session_state.flags     = flags
                 st.session_state.questions = questions
 
-                # Save to history
                 st.session_state.history.insert(0, {
+                    "id": datetime.now().strftime("%Y%m%d%H%M%S"),
                     "date": datetime.now().strftime("%b %d, %Y · %I:%M %p"),
                     "topic": topic_type,
                     "snippet": text_input[:80] + "...",
@@ -304,7 +302,6 @@ with tabs[0]:
                     "questions": questions,
                     "level": level,
                 })
-                # Keep last 10
                 st.session_state.history = st.session_state.history[:10]
 
     if st.session_state.get("result"):
@@ -321,7 +318,6 @@ with tabs[0]:
         }
         bg, fg, emoji = level_colors.get(level, ("#f9fafb", "#374151", "🧠"))
 
-        # Explanation
         st.markdown(f"""
         <div class="result-card">
             <div class="result-label" style="color:{fg};">{emoji} Explained for a {level}</div>
@@ -332,21 +328,19 @@ with tabs[0]:
         if s.get("TL;DR"):
             st.markdown(f'<div class="tldr-box">⚡ <strong>TL;DR:</strong> {s["TL;DR"]}</div>', unsafe_allow_html=True)
 
-        # Red flags
         if flags:
             items_html = "".join([f'<div class="redflag-item">{f}</div>' for f in flags])
             st.markdown(f"""
             <div class="redflag-box">
-                <div class="redflag-title">🚩 Red Flags & Risky Clauses</div>
+                <div class="redflag-title">🚩 Things to Watch Out For</div>
                 {items_html}
             </div>""", unsafe_allow_html=True)
 
-        # Questions to ask
         if questions:
             items_html = "".join([f'<div class="question-item">💬 {q}</div>' for q in questions])
             st.markdown(f"""
             <div class="questions-box">
-                <div class="questions-title">❓ Questions to Ask Before Signing</div>
+                <div class="questions-title">❓ Questions to Ask</div>
                 {items_html}
             </div>""", unsafe_allow_html=True)
 
@@ -369,21 +363,31 @@ with tabs[1]:
         st.info("No history yet — analyze a document to see it saved here.")
     else:
         st.caption(f"{len(st.session_state.history)} saved analyses")
-        for i, item in enumerate(st.session_state.history):
-            with st.expander(f"📄 {item['topic']} · {item['date']}"):
-                st.markdown(f"**Snippet:** {item['snippet']}")
-                r = item["result"]
-                if r.get("EXPLANATION"):
-                    st.markdown(f"**Explanation:** {r['EXPLANATION']}")
-                if r.get("TL;DR"):
-                    st.markdown(f'<div class="tldr-box">⚡ <strong>TL;DR:</strong> {r["TL;DR"]}</div>', unsafe_allow_html=True)
-                if item.get("flags"):
-                    for f in item["flags"]:
-                        st.markdown(f"🚩 {f}")
-                if item.get("questions"):
-                    for q in item["questions"]:
-                        st.markdown(f"💬 {q}")
 
-        if st.button("🗑️ Clear history"):
+        for i, item in enumerate(st.session_state.history):
+            col_title, col_delete = st.columns([9, 1])
+            with col_title:
+                with st.expander(f"📄 {item['topic']} · {item['date']}"):
+                    st.markdown(f"**Snippet:** {item['snippet']}")
+                    r = item["result"]
+                    if r.get("EXPLANATION"):
+                        st.markdown(f"**Explanation:** {r['EXPLANATION']}")
+                    if r.get("TL;DR"):
+                        st.markdown(f'<div class="tldr-box">⚡ <strong>TL;DR:</strong> {r["TL;DR"]}</div>', unsafe_allow_html=True)
+                    if item.get("flags"):
+                        st.markdown("**🚩 Flags:**")
+                        for f in item["flags"]:
+                            st.markdown(f"- {f}")
+                    if item.get("questions"):
+                        st.markdown("**❓ Questions:**")
+                        for q in item["questions"]:
+                            st.markdown(f"- {q}")
+            with col_delete:
+                if st.button("✕", key=f"del_{item['id']}_{i}"):
+                    st.session_state.history.pop(i)
+                    st.rerun()
+
+        st.divider()
+        if st.button("🗑️ Clear all history"):
             st.session_state.history = []
             st.rerun()
