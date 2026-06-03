@@ -1,562 +1,420 @@
-import streamlit as st
-import requests
+"""
+ClearSign — Understand any document before you sign.
+
+Drop-in replacement for the live Streamlit app. Keeps the existing infrastructure
+(st.secrets["ANTHROPIC_KEY"], direct REST calls via requests, PyMuPDF for PDF) so it
+redeploys without changes, while upgrading the product:
+
+  • Fixed the invisible-label bug — everything is high-contrast and readable.
+  • Grounded red flags: each one quotes the exact clause, with a severity badge,
+    a plain-English consequence, and a concrete "what to ask for" redline.
+  • A 0-100 risk score + "who it favors" verdict.
+  • Version compare that says whether v2 got better or WORSE for you, per change.
+  • Session history + one-click Markdown export.
+
+Not legal advice.
+"""
+
+import io
 import json
 from datetime import datetime
 
-st.set_page_config(page_title="ClearSign", page_icon="📋", layout="centered")
+import requests
+import streamlit as st
 
-ANTHROPIC_KEY = st.secrets["ANTHROPIC_KEY"]
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
+
+st.set_page_config(page_title="ClearSign — understand any document", page_icon="📋", layout="centered")
+
+# Match the existing secret name; fall back to the SDK-style name just in case.
+ANTHROPIC_KEY = st.secrets.get("ANTHROPIC_KEY") or st.secrets.get("ANTHROPIC_API_KEY")
+
+MODEL = "claude-haiku-4-5-20251001"  # proven on this account; fast + cheap
+API_URL = "https://api.anthropic.com/v1/messages"
+
+DOC_TYPES = {
+    "Auto-detect": "Detect the document type yourself and analyze accordingly.",
+    "Service / freelance agreement": "Focus on scope creep, payment & kill fees, IP ownership, indemnification, termination.",
+    "Vendor / SaaS contract": "Focus on auto-renewal, price-increase rights, data ownership, liability caps, SLAs, termination for convenience.",
+    "Employment / offer letter": "Focus on at-will clauses, non-competes, IP assignment, equity vesting, severance, arbitration.",
+    "NDA": "Focus on the definition of confidential info, term length, residuals, non-solicit, one-sided obligations.",
+    "Lease / rental": "Focus on auto-renewal, fees, repair duties, early-termination penalties, entry rights.",
+    "Terms of Service": "Focus on arbitration, class-action waivers, data/privacy rights, unilateral changes, account termination.",
+    "Other / general": "Analyze as a general contract; surface anything one-sided or unusual.",
+}
+
+SEVERITY = {
+    "high":   {"label": "High risk",    "color": "#dc2626", "bg": "#fef2f2", "border": "#fecaca", "dot": "🔴"},
+    "medium": {"label": "Worth noting", "color": "#d97706", "bg": "#fffbeb", "border": "#fde68a", "dot": "🟠"},
+    "low":    {"label": "Minor",        "color": "#2563eb", "bg": "#eff6ff", "border": "#bfdbfe", "dot": "🔵"},
+}
+
+# --------------------------------------------------------------------------- #
+# Styling — explicit colors so nothing renders white-on-white
+# --------------------------------------------------------------------------- #
 
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 #MainMenu, footer, header { visibility: hidden; }
-.stApp { background: #f8f9ff; }
+.stApp { background: #f8fafc; }
 [data-testid="stSidebar"] { display: none; }
-.hero { text-align: center; padding: 40px 0 28px 0; }
-.hero h1 { font-size: 2.4rem; font-weight: 800; color: #1a1a2e; margin: 0; }
-.hero .sub { color: #6b7280; font-size: 0.92rem; margin: 8px 0 0 0; }
-.hero .badge {
-    display: inline-block; background: #f0fdf4; color: #166534;
-    border: 1px solid #86efac; border-radius: 999px;
-    font-size: 0.75rem; font-weight: 600; padding: 4px 12px; margin-top: 10px;
+
+/* Force readable text on every control — this is the invisible-label fix */
+html, body, [class*="css"], .stMarkdown, label, p, span, li,
+.stRadio label, .stCheckbox label, .stSelectbox label, .stTextArea label,
+.stFileUploader label, .stTabs [data-baseweb="tab"], .stRadio div, .stCheckbox div {
+    color: #0f172a !important;
 }
-.result-card {
-    background: white; border: 1px solid #e5e7eb; border-radius: 16px;
-    padding: 28px; margin-top: 20px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.06);
-}
-.result-label {
-    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1px; margin-bottom: 12px;
-}
-.result-text { font-size: 1.05rem; line-height: 1.75; color: #1a1a2e; }
-.redflag-box {
-    background: #fff1f2; border: 1px solid #fecdd3; border-left: 4px solid #f43f5e;
-    border-radius: 10px; padding: 16px; margin-top: 12px;
-}
-.redflag-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1px; color: #be123c; margin-bottom: 10px; }
-.redflag-item { font-size: 0.9rem; color: #881337; padding: 5px 0;
-    border-bottom: 1px solid #fecdd3; line-height: 1.5; }
-.redflag-item:last-child { border-bottom: none; }
-.questions-box {
-    background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #3b82f6;
-    border-radius: 10px; padding: 16px; margin-top: 12px;
-}
-.questions-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1px; color: #1d4ed8; margin-bottom: 10px; }
-.question-item { font-size: 0.9rem; color: #1e40af; padding: 5px 0;
-    border-bottom: 1px solid #bfdbfe; line-height: 1.5; }
-.question-item:last-child { border-bottom: none; }
-.actions-box {
-    background: #f0fdf4; border: 1px solid #86efac; border-left: 4px solid #22c55e;
-    border-radius: 10px; padding: 16px; margin-top: 12px;
-}
-.actions-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 1px; color: #15803d; margin-bottom: 10px; }
-.action-item { font-size: 0.9rem; color: #166534; padding: 5px 0;
-    border-bottom: 1px solid #86efac; line-height: 1.5; }
-.action-item:last-child { border-bottom: none; }
-.tldr-box {
-    background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px;
-    padding: 14px 16px; margin-top: 12px; font-size: 0.9rem;
-    color: #166534; font-weight: 600; line-height: 1.6;
-}
-.analogy-box {
-    background: #fff8f0; border: 1px solid #fed7aa; border-radius: 10px;
-    padding: 14px 16px; margin-top: 12px; font-size: 0.9rem;
-    color: #92400e; line-height: 1.6;
-}
-.vocab-box {
-    background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 10px;
-    padding: 14px 16px; margin-top: 12px; font-size: 0.88rem;
-    color: #4c1d95; line-height: 1.8;
-}
-.stButton > button {
-    background: #6366f1 !important; color: white !important;
-    border: none !important; border-radius: 10px !important;
-    font-weight: 700 !important; font-size: 1rem !important;
-    padding: 12px 28px !important; width: 100% !important;
-}
-.stButton > button:hover { background: #4f46e5 !important; }
-.stTextArea textarea {
-    background: white !important; border: 1.5px solid #e5e7eb !important;
-    border-radius: 10px !important; color: #1a1a2e !important;
-    font-size: 0.92rem !important; line-height: 1.6 !important;
-}
-.stSelectbox > div > div {
-    background: white !important; border: 1.5px solid #e5e7eb !important;
-    border-radius: 10px !important;
-}
-hr { border-color: #e5e7eb !important; }
-.stTabs [data-baseweb="tab-list"] {
-    gap: 24px;
-    padding: 0 4px;
-}
-.stTabs [data-baseweb="tab"] {
-    padding: 8px 20px !important;
-    font-weight: 600 !important;
-}
+.block-container { max-width: 880px; padding-top: 1.8rem; }
+
+.hero { text-align: center; padding: 8px 0 6px; }
+.hero h1 { font-size: 2.5rem; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -.02em; }
+.hero .tag { color: #0f172a; font-weight: 600; font-size: 1.12rem; margin-top: 4px; }
+.hero .sub { color: #475569; font-size: .95rem; margin: 6px auto 0; max-width: 560px; }
+.pills { text-align: center; margin: 12px 0 18px; }
+.pill { display:inline-block; background:#eef2ff; color:#4f46e5 !important; border-radius:999px;
+        padding:4px 11px; margin:3px; font-size:.8rem; font-weight:600; }
+
+.stButton > button { background:#4f46e5 !important; color:#fff !important; border:0 !important;
+        border-radius:10px !important; font-weight:700 !important; font-size:1rem !important;
+        padding:11px 22px !important; width:100% !important; }
+.stButton > button:hover { background:#4338ca !important; }
+.stTextArea textarea { background:#fff !important; border:1.5px solid #e2e8f0 !important;
+        border-radius:10px !important; color:#0f172a !important; font-size:.92rem !important; }
+.stSelectbox > div > div { background:#fff !important; border:1.5px solid #e2e8f0 !important; border-radius:10px !important; }
+
+.card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; margin-top:12px; }
+.flag-title { font-weight:700; font-size:1.02rem; margin:2px 0; color:#0f172a; }
+.quote { border-left:3px solid #e2e8f0; padding:6px 11px; margin:8px 0; background:#f8fafc;
+         color:#475569; font-style:italic; border-radius:4px; font-size:.9rem; }
+.lab { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:#475569; font-weight:700; }
+.badge { display:inline-block; border-radius:999px; padding:2px 9px; font-size:.74rem; font-weight:700; }
+.score-num { font-size:3rem; font-weight:800; line-height:1; }
+.score-cap { color:#475569; font-size:.88rem; }
+.foot { color:#475569; font-size:.8rem; text-align:center; margin-top:28px; }
+hr { border-color:#e2e8f0 !important; }
+.stTabs [data-baseweb="tab-list"] { gap:22px; }
+.stTabs [data-baseweb="tab"] { font-weight:600 !important; }
+.stTabs [aria-selected="true"] { color:#4f46e5 !important; }
 </style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="hero">
+  <h1>📋 ClearSign</h1>
+  <div class="tag">Understand any document before you sign.</div>
+  <div class="sub">Paste it or upload it. Get the risks, the questions to ask, and what to do next — in plain English.</div>
+</div>
+<div class="pills">
+  <span class="pill">⚖️ Risk score</span>
+  <span class="pill">🚩 Grounded red flags</span>
+  <span class="pill">❓ Questions to ask</span>
+  <span class="pill">✅ Action items</span>
+  <span class="pill">🔀 Version compare</span>
+</div>
 """, unsafe_allow_html=True)
 
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# ── AI functions ──────────────────────────────────────────────────────────────
-def explain(text, level, topic_type):
-    level_prompts = {
-        "5-year-old": "Explain this like I am 5 years old. Use super simple words, fun analogies, and short sentences.",
-        "Middle schooler": "Explain this like I'm in middle school. Use clear simple language and relatable examples.",
-        "Smart adult": "Explain this clearly for a smart adult with no background in this topic. Cut the jargon.",
-        "Expert": "Give a thorough, nuanced explanation. Include key mechanics, implications, and tradeoffs."
-    }
-    prompt = f"""You are an expert at making complex things simple. Someone pasted this {topic_type}.
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 
-CONTENT:
-{text[:3000]}
-
-TASK: {level_prompts[level]}
-
-Respond with EXACTLY this format:
-
-EXPLANATION:
-[3 to 6 sentences]
-
-ANALOGY:
-[One vivid analogy starting with "Think of it like..."]
-
-TL;DR:
-[One single sentence summary]
-
-KEY TERMS:
-[3-5 key terms, format: **word** — definition]"""
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 800,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=25
-        )
-        return r.json()["content"][0]["text"]
-    except:
-        return None
-
-def detect_red_flags(text, topic_type):
-    prompt = f"""You are an expert analyst. Analyze this {topic_type} and find things the person should be aware of, watch out for, or question.
-
-CONTENT:
-{text[:3000]}
-
-Find 3-5 specific flags, risks, concerns, or notable things depending on the document type:
-- For contracts/legal docs: risky clauses, unusual terms, things that could hurt them
-- For resumes/profiles: gaps, weaknesses, things to improve
-- For financial reports: risks, red flags, concerning trends
-- For news/articles: bias, missing context, claims to verify
-- For emails/memos: tone issues, unclear asks, potential problems
-- For medical reports: things to ask the doctor, concerning findings
-- For anything else: the most important things to be aware of
-
-Make each point specific to the actual content. Start each with ⚠️
-
-Return ONLY a JSON array:
-["⚠️ Specific point 1", "⚠️ Specific point 2", "⚠️ Specific point 3"]"""
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 400,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=20
-        )
-        txt = r.json()["content"][0]["text"].strip()
-        start, end = txt.find("["), txt.rfind("]")
-        if start != -1 and end != -1:
-            return json.loads(txt[start:end+1])
-        return []
-    except:
-        return []
-
-def get_questions(text, topic_type):
-    prompt = f"""You are an expert advisor. Someone just read this {topic_type}.
-
-CONTENT:
-{text[:3000]}
-
-Give them exactly 3 smart, specific questions they should ask or think about:
-- For contracts: questions to ask before signing
-- For resumes: questions for an interview or self-reflection
-- For financial reports: questions for an investor or analyst
-- For news/articles: questions to dig deeper or verify
-- For emails/memos: questions to clarify before responding
-- For medical reports: questions to ask the doctor
-- For anything else: the most useful follow-up questions
-
-Make them specific to the actual content.
-
-Return ONLY a JSON array:
-["Question 1?", "Question 2?", "Question 3?"]"""
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=20
-        )
-        txt = r.json()["content"][0]["text"].strip()
-        start, end = txt.find("["), txt.rfind("]")
-        if start != -1 and end != -1:
-            return json.loads(txt[start:end+1])
-        return []
-    except:
-        return []
-
-def get_action_items(text, topic_type):
-    prompt = f"""You are an expert advisor. Someone just read this {topic_type}.
-
-CONTENT:
-{text[:3000]}
-
-Give them exactly 3 concrete, specific action items — things they should actually DO:
-- For contracts/legal: specific steps before signing or after
-- For resumes: specific improvements to make
-- For financial reports: specific things to research or act on
-- For news/articles: specific things to verify or follow up on
-- For emails/memos: specific things to do before responding
-- For medical reports: specific things to do before the next appointment
-- For anything else: the 3 most useful next steps
-
-Make them specific to the actual content. Start each with a verb.
-
-Return ONLY a JSON array:
-["Action item 1", "Action item 2", "Action item 3"]"""
-    try:
-        r = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=20
-        )
-        txt = r.json()["content"][0]["text"].strip()
-        start, end = txt.find("["), txt.rfind("]")
-        if start != -1 and end != -1:
-            return json.loads(txt[start:end+1])
-        return []
-    except:
-        return []
-
-def parse_response(text):
-    sections = {}
-    for section in ["EXPLANATION", "ANALOGY", "TL;DR", "KEY TERMS"]:
-        if section + ":" in text:
-            start = text.index(section + ":") + len(section) + 1
-            next_sections = [s + ":" for s in ["EXPLANATION", "ANALOGY", "TL;DR", "KEY TERMS"]
-                             if s + ":" in text and text.index(s + ":") > start]
-            end = text.index(next_sections[0]) if next_sections else len(text)
-            sections[section] = text[start:end].strip()
-    return sections
-
-# ── UI ────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="hero">
-    <h1>📋 ClearSign</h1>
-    <div class="sub">Paste any document — understand it instantly, spot the risks, know what to do next</div>
-    <div class="badge">✓ Red flags &nbsp;·&nbsp; ✓ Questions to ask &nbsp;·&nbsp; ✓ Action items &nbsp;·&nbsp; ✓ Compare docs</div>
-</div>
-""", unsafe_allow_html=True)
-
-tabs = st.tabs(["📄 Analyze", "🔀 Compare", "🕘 History"])
-
-# ── TAB 1: Analyze ────────────────────────────────────────────────────────────
-with tabs[0]:
-    topic_type = st.selectbox(
-        "What are you analyzing?",
-        ["Contract", "Legal document", "Lease agreement", "Employment offer",
-         "Earnings report", "Financial report", "Academic paper",
-         "Email / memo", "Policy document", "Medical report",
-         "Resume / profile", "News article", "Something else"]
+def _call_claude(prompt, max_tokens=4000, system=None):
+    if not ANTHROPIC_KEY:
+        st.error("No API key found. Add ANTHROPIC_KEY to your Streamlit secrets and reload.")
+        st.stop()
+    body = {"model": MODEL, "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}]}
+    if system:
+        body["system"] = system
+    r = requests.post(
+        API_URL,
+        headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY,
+                 "anthropic-version": "2023-06-01"},
+        json=body, timeout=60,
     )
+    r.raise_for_status()
+    return r.json()["content"][0]["text"]
 
-   
 
-    uploaded_file = st.file_uploader("", type=["pdf", "docx"], label_visibility="collapsed")
+def _parse_json(raw):
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1] if raw.count("```") >= 2 else raw
+        raw = raw.replace("json", "", 1).strip() if raw.lstrip().startswith("json") else raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        s, e = raw.find("{"), raw.rfind("}")
+        if s != -1 and e != -1:
+            try:
+                return json.loads(raw[s:e + 1])
+            except json.JSONDecodeError:
+                pass
+    return {"_error": "Could not parse the response. Try again.", "_raw": raw[:1500]}
 
-    text_input = ""
-    if uploaded_file:
+
+def extract_text(uploaded):
+    name = (uploaded.name or "").lower()
+    data = uploaded.read()
+    if name.endswith(".pdf"):
         try:
-            if uploaded_file.type == "application/pdf":
-                import fitz
-                doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-                text_input = "\n".join(page.get_text() for page in doc)
-            else:
-                import docx as docxlib
-                doc = docxlib.Document(uploaded_file)
-                text_input = "\n".join(p.text for p in doc.paragraphs)
-            st.success(f"✅ Loaded: {uploaded_file.name}")
-        except Exception as e:
-            st.error(f"Could not read file: {e}")
-    else:
-        text_input = st.text_area(
-            "Or paste text directly",
-            placeholder="Paste your document, contract, article, email, or any text here...",
-            height=180,
-        )
+            import fitz  # PyMuPDF
+            doc = fitz.open(stream=data, filetype="pdf")
+            return "\n".join(page.get_text() for page in doc).strip()
+        except Exception:
+            return ""
+    if name.endswith(".docx"):
+        try:
+            import docx as docxlib
+            d = docxlib.Document(io.BytesIO(data))
+            return "\n".join(p.text for p in d.paragraphs).strip()
+        except Exception:
+            return ""
+    try:
+        return data.decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
 
-    level = st.radio(
-        "Explain it like I'm a...",
-        ["5-year-old", "Middle schooler", "Smart adult", "Expert"],
-        horizontal=True,
-        index=2
-    )
 
-    show_flags     = st.checkbox("🚩 Detect red flags & things to watch out for", value=True)
-    show_questions = st.checkbox("❓ Show questions to ask", value=True)
-    show_actions   = st.checkbox("✅ Show action items — what to do next", value=True)
+ANALYSIS_PROMPT = """You are ClearSign, a sharp contract analyst who explains documents to non-lawyers.
+You are precise and NEVER invent clauses — every finding is tied to the exact text. Not legal advice.
 
-    if st.button("📋 Analyze Document"):
-        if not text_input.strip():
-            st.error("Upload a file or paste some text first.")
-        else:
-            with st.spinner("Analyzing your document..."):
-                raw       = explain(text_input, level, topic_type)
-                flags     = detect_red_flags(text_input, topic_type) if show_flags else []
-                questions = get_questions(text_input, topic_type) if show_questions else []
-                actions   = get_action_items(text_input, topic_type) if show_actions else []
+Document type context: {dt}. {focus}
+Review depth: {depth}.
 
-            if not raw:
-                st.error("Something went wrong — try again.")
-            else:
-                result = parse_response(raw)
-                st.session_state.result    = result
-                st.session_state.level     = level
-                st.session_state.flags     = flags
-                st.session_state.questions = questions
-                st.session_state.actions   = actions
+Return ONLY valid JSON (no markdown fences) of this exact shape:
+{{
+  "doc_type": "your best guess at what this document is",
+  "summary": "2-3 plain-English sentences a non-lawyer understands",
+  "risk_score": 0,
+  "risk_label": "e.g. 'Mostly standard', 'Several concerns', 'High risk'",
+  "who_it_favors": "'you', 'the other party', or 'balanced' + one clause why",
+  "red_flags": [
+    {{"title": "short label",
+      "severity": "high|medium|low",
+      "quote": "EXACT text from the document this is based on (verbatim, trim with …)",
+      "why": "plain-English real-world consequence for the reader",
+      "suggested_ask": "concrete redline or question to send the other party"}}
+  ],
+  "questions": ["specific questions to ask before signing"],
+  "action_items": ["concrete next steps, most important first"]
+}}
+Rules: every red_flag.quote MUST be copied from the document; if you can't ground it, drop it.
+3-8 red flags max. Be concrete. No disclaimers inside fields.
 
-                st.session_state.history.insert(0, {
-                    "id": datetime.now().strftime("%Y%m%d%H%M%S"),
-                    "date": datetime.now().strftime("%b %d, %Y · %I:%M %p"),
-                    "topic": topic_type,
-                    "snippet": text_input[:80] + "...",
-                    "result": result,
-                    "flags": flags,
-                    "questions": questions,
-                    "actions": actions,
-                    "level": level,
-                })
-                st.session_state.history = st.session_state.history[:10]
+DOCUMENT:
+\"\"\"
+{text}
+\"\"\""""
 
-    if st.session_state.get("result"):
-        s         = st.session_state.result
-        level     = st.session_state.level
-        flags     = st.session_state.get("flags", [])
-        questions = st.session_state.get("questions", [])
-        actions   = st.session_state.get("actions", [])
+COMPARE_PROMPT = """You are ClearSign comparing two versions of a document for a non-lawyer.
+For each meaningful change, say whether it is better or WORSE FOR THE READER and why.
+Ground every change in the actual text. Not legal advice.
 
-        level_colors = {
-            "5-year-old":      ("#fef3c7", "#92400e", "👶"),
-            "Middle schooler": ("#ede9fe", "#4c1d95", "🎒"),
-            "Smart adult":     ("#f0fdf4", "#166534", "🧑"),
-            "Expert":          ("#eff6ff", "#1e40af", "🎓"),
-        }
-        bg, fg, emoji = level_colors.get(level, ("#f9fafb", "#374151", "🧠"))
+Return ONLY valid JSON (no fences):
+{{
+  "overall": "1-2 sentence verdict: did version B get better or worse for the reader?",
+  "verdict": "better|worse|mixed|no_material_change",
+  "changes": [
+    {{"what": "what changed, plainly",
+      "direction": "better|worse|neutral",
+      "from": "short quote/paraphrase of A",
+      "to": "short quote/paraphrase of B",
+      "impact": "why it matters to the reader"}}
+  ]
+}}
+Material changes only; ignore pure formatting.
 
-        st.markdown(f"""
-        <div class="result-card">
-            <div class="result-label" style="color:{fg};">{emoji} Explained for a {level}</div>
-            <div class="result-text">{s.get("EXPLANATION", "")}</div>
-        </div>
-        """, unsafe_allow_html=True)
+VERSION A (older):
+\"\"\"
+{a}
+\"\"\"
 
-        if s.get("TL;DR"):
-            st.markdown(f'<div class="tldr-box">⚡ <strong>TL;DR:</strong> {s["TL;DR"]}</div>', unsafe_allow_html=True)
+VERSION B (newer):
+\"\"\"
+{b}
+\"\"\""""
 
-        if flags:
-            items_html = "".join([f'<div class="redflag-item">{f}</div>' for f in flags])
-            st.markdown(f"""
-            <div class="redflag-box">
-                <div class="redflag-title">🚩 Things to Watch Out For</div>
-                {items_html}
-            </div>""", unsafe_allow_html=True)
 
-        if questions:
-            items_html = "".join([f'<div class="question-item">💬 {q}</div>' for q in questions])
-            st.markdown(f"""
-            <div class="questions-box">
-                <div class="questions-title">❓ Questions to Ask</div>
-                {items_html}
-            </div>""", unsafe_allow_html=True)
+def render_result(res):
+    if "_error" in res:
+        st.error(res["_error"])
+        return
 
-        if actions:
-            items_html = "".join([f'<div class="action-item">✅ {a}</div>' for a in actions])
-            st.markdown(f"""
-            <div class="actions-box">
-                <div class="actions-title">✅ Action Items — What To Do Next</div>
-                {items_html}
-            </div>""", unsafe_allow_html=True)
+    score = int(res.get("risk_score", 0) or 0)
+    color = "#dc2626" if score >= 67 else "#d97706" if score >= 34 else "#16a34a"
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        st.markdown(f'<div style="text-align:center"><div class="score-num" style="color:{color}">{score}</div>'
+                    f'<div class="score-cap">risk / 100</div></div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f"**{res.get('risk_label','')}**")
+        if res.get("who_it_favors"):
+            st.markdown(f"**Favors:** {res['who_it_favors']}")
+        if res.get("doc_type"):
+            st.caption(f"Detected as: {res['doc_type']}")
 
-        if s.get("ANALOGY"):
-            st.markdown(f'<div class="analogy-box">🔍 <strong>Analogy:</strong> {s["ANALOGY"]}</div>', unsafe_allow_html=True)
+    if res.get("summary"):
+        st.markdown("#### In plain English")
+        st.write(res["summary"])
 
-        if s.get("KEY TERMS"):
-            terms_html = s["KEY TERMS"].replace("\n", "<br>")
-            st.markdown(f'<div class="vocab-box">📖 <strong>Key Terms:</strong><br><br>{terms_html}</div>', unsafe_allow_html=True)
-
-        st.divider()
-
-        if st.button("📤 Copy summary"):
-            summary_text = f"📋 ClearSign Analysis\n\n"
-            summary_text += f"TL;DR: {s.get('TL;DR', '')}\n\n"
-            if flags:
-                summary_text += "🚩 Things to Watch Out For:\n" + "\n".join(flags) + "\n\n"
-            if questions:
-                summary_text += "❓ Questions to Ask:\n" + "\n".join(questions) + "\n\n"
-            if actions:
-                summary_text += "✅ Action Items:\n" + "\n".join(actions)
-            st.code(summary_text, language=None)
-            st.caption("Select all and copy 👆")
-
-        if st.button("🔄 Analyze something else"):
-            for key in ["result", "level", "flags", "questions", "actions"]:
-                st.session_state.pop(key, None)
-            st.rerun()
-
-# ── TAB 2: Compare ────────────────────────────────────────────────────────────
-with tabs[1]:
-    st.markdown("### 🔀 Compare Two Documents")
-    st.caption("Paste two documents side by side to see how they differ.")
+    flags = res.get("red_flags", []) or []
+    if flags:
+        st.markdown(f"#### 🚩 Red flags ({len(flags)})")
+        for f in flags:
+            m = SEVERITY.get((f.get("severity") or "medium").lower(), SEVERITY["medium"])
+            q = (f.get("quote") or "").strip()
+            st.markdown(
+                f"""<div class="card" style="border-left:5px solid {m['color']}">
+                    <span class="badge" style="background:{m['bg']};color:{m['color']};border:1px solid {m['border']}">{m['dot']} {m['label']}</span>
+                    <div class="flag-title">{f.get('title','')}</div>
+                    {f'<div class="quote">“{q}”</div>' if q else ''}
+                    <div><span class="lab">What it means</span><br>{f.get('why','')}</div>
+                    {f'<div style="margin-top:8px"><span class="lab">What to ask for</span><br>{f.get("suggested_ask","")}</div>' if f.get('suggested_ask') else ''}
+                </div>""", unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**Document A**")
-        file_a = st.file_uploader("Upload Doc A", type=["pdf", "docx"], key="file_a")
-        doc_a = ""
-        if file_a:
-            try:
-                if file_a.type == "application/pdf":
-                    import fitz
-                    d = fitz.open(stream=file_a.read(), filetype="pdf")
-                    doc_a = "\n".join(page.get_text() for page in d)
-                else:
-                    import docx as docxlib
-                    d = docxlib.Document(file_a)
-                    doc_a = "\n".join(p.text for p in d.paragraphs)
-                st.success(f"✅ {file_a.name}")
-            except:
-                st.error("Could not read file.")
-        else:
-            doc_a = st.text_area("Or paste text", placeholder="Paste first document here...", height=180, key="doc_a")
-
+        if res.get("questions"):
+            st.markdown("#### ❓ Questions to ask")
+            for q in res["questions"]:
+                st.markdown(f"- {q}")
     with col2:
-        st.markdown("**Document B**")
-        file_b = st.file_uploader("Upload Doc B", type=["pdf", "docx"], key="file_b")
-        doc_b = ""
-        if file_b:
-            try:
-                if file_b.type == "application/pdf":
-                    import fitz
-                    d = fitz.open(stream=file_b.read(), filetype="pdf")
-                    doc_b = "\n".join(page.get_text() for page in d)
-                else:
-                    import docx as docxlib
-                    d = docxlib.Document(file_b)
-                    doc_b = "\n".join(p.text for p in d.paragraphs)
-                st.success(f"✅ {file_b.name}")
-            except:
-                st.error("Could not read file.")
-        else:
-            doc_b = st.text_area("Or paste text", placeholder="Paste second document here...", height=180, key="doc_b")
+        if res.get("action_items"):
+            st.markdown("#### ✅ Action items")
+            for a in res["action_items"]:
+                st.markdown(f"- {a}")
 
-    if st.button("🔀 Compare Documents"):
-        if not doc_a.strip() or not doc_b.strip():
-            st.error("Paste both documents first.")
+
+def result_to_markdown(res):
+    L = [f"# ClearSign analysis — {res.get('doc_type','document')}", "",
+         f"**Risk score:** {res.get('risk_score','?')}/100 — {res.get('risk_label','')}",
+         f"**Favors:** {res.get('who_it_favors','')}", "", "## Summary", res.get("summary", ""), "", "## Red flags"]
+    for f in res.get("red_flags", []) or []:
+        L.append(f"### [{(f.get('severity') or '').upper()}] {f.get('title','')}")
+        if f.get("quote"):
+            L.append(f"> {f['quote']}")
+        L.append(f"- **What it means:** {f.get('why','')}")
+        if f.get("suggested_ask"):
+            L.append(f"- **What to ask for:** {f['suggested_ask']}")
+        L.append("")
+    L += ["## Questions to ask"] + [f"- {q}" for q in res.get("questions", []) or []]
+    L += ["", "## Action items"] + [f"- {a}" for a in res.get("action_items", []) or []]
+    L += ["", "---", "_Generated by ClearSign. Informational only — not legal advice._"]
+    return "\n".join(L)
+
+
+# --------------------------------------------------------------------------- #
+# Tabs
+# --------------------------------------------------------------------------- #
+
+tabs = st.tabs(["📋 Analyze", "🔀 Compare versions", "🕘 History"])
+
+# ---- Analyze ----
+with tabs[0]:
+    cL, cR = st.columns([2, 1])
+    with cL:
+        doc_label = st.selectbox("Document type", list(DOC_TYPES.keys()), index=0,
+                                 help="Tunes what ClearSign looks for.")
+    with cR:
+        depth = st.radio("Depth", ["Quick scan", "Standard", "Deep review"], index=1)
+
+    up = st.file_uploader("Upload a file (optional)", type=["pdf", "docx", "txt"])
+    text = st.text_area("…or paste the text here", height=220,
+                        placeholder="Paste your contract, agreement, lease, or terms of service…")
+
+    if up is not None:
+        ex = extract_text(up)
+        if ex:
+            text = ex
+            st.success(f"Loaded {len(ex):,} characters from {up.name}.")
         else:
-            with st.spinner("Comparing..."):
+            st.warning(f"Couldn't read text from {up.name}. If it's a scanned PDF, paste the text instead.")
+
+    if st.button("📋 Analyze document"):
+        if not text or len(text.strip()) < 40:
+            st.warning("Please paste or upload a document with a bit more text.")
+        else:
+            with st.spinner("Reading every clause…"):
                 try:
-                    prompt = f"""Compare these two documents and highlight the key differences.
+                    raw = _call_claude(ANALYSIS_PROMPT.format(
+                        dt=doc_label, focus=DOC_TYPES[doc_label], depth=depth, text=text.strip()[:60000]))
+                    res = _parse_json(raw)
+                except Exception as e:
+                    res = {"_error": f"Request failed: {e}"}
+            st.session_state.last_result = res
+            if "_error" not in res:
+                st.session_state.history.insert(0, {
+                    "title": (res.get("doc_type") or doc_label or "Document")[:60],
+                    "when": datetime.now().strftime("%b %d, %I:%M %p"),
+                    "result": res,
+                })
+                st.session_state.history = st.session_state.history[:15]
 
-DOCUMENT A:
-{doc_a[:2000]}
+    if st.session_state.get("last_result"):
+        st.divider()
+        render_result(st.session_state.last_result)
+        if "_error" not in st.session_state.last_result:
+            st.download_button("⬇️ Download analysis (Markdown)",
+                               result_to_markdown(st.session_state.last_result),
+                               file_name="clearsign-analysis.md", mime="text/markdown")
 
-DOCUMENT B:
-{doc_b[:2000]}
+# ---- Compare ----
+with tabs[1]:
+    st.markdown("Paste two versions of a document. ClearSign tells you **what changed and whether it got better or worse for you.**")
+    a_col, b_col = st.columns(2)
+    with a_col:
+        va = st.text_area("Version A (older)", height=240, key="cmp_a")
+    with b_col:
+        vb = st.text_area("Version B (newer)", height=240, key="cmp_b")
 
-Return ONLY a JSON object:
-{{
-  "summary": "One sentence on the overall difference",
-  "doc_a_advantages": ["advantage 1", "advantage 2", "advantage 3"],
-  "doc_b_advantages": ["advantage 1", "advantage 2", "advantage 3"],
-  "key_differences": ["difference 1", "difference 2", "difference 3", "difference 4", "difference 5"]
-}}"""
-                    r = requests.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01"},
-                        json={"model": "claude-haiku-4-5-20251001", "max_tokens": 600,
-                              "messages": [{"role": "user", "content": prompt}]},
-                        timeout=25
-                    )
-                    txt = r.json()["content"][0]["text"].strip()
-                    start, end = txt.find("{"), txt.rfind("}")
-                    comp = json.loads(txt[start:end+1])
+    if st.button("🔀 Compare versions"):
+        if len(va.strip()) < 40 or len(vb.strip()) < 40:
+            st.warning("Paste both versions (a bit more text needed).")
+        else:
+            with st.spinner("Diffing the meaning, not just the words…"):
+                try:
+                    raw = _call_claude(COMPARE_PROMPT.format(a=va.strip()[:30000], b=vb.strip()[:30000]),
+                                       max_tokens=3000)
+                    res = _parse_json(raw)
+                except Exception as e:
+                    res = {"_error": f"Request failed: {e}"}
+            if "_error" in res:
+                st.error(res["_error"])
+            else:
+                vmap = {"better": ("#16a34a", "Better for you ✅"), "worse": ("#dc2626", "Worse for you ⚠️"),
+                        "mixed": ("#d97706", "Mixed 🟠"), "no_material_change": ("#475569", "No material change")}
+                vc, vl = vmap.get(res.get("verdict", ""), ("#475569", res.get("verdict", "")))
+                st.markdown(f"<h4 style='color:{vc}'>{vl}</h4>", unsafe_allow_html=True)
+                st.write(res.get("overall", ""))
+                for ch in res.get("changes", []) or []:
+                    dc = {"better": "#16a34a", "worse": "#dc2626", "neutral": "#475569"}.get(ch.get("direction", "neutral"), "#475569")
+                    st.markdown(
+                        f"""<div class="card" style="border-left:5px solid {dc}">
+                            <div class="flag-title">{ch.get('what','')}</div>
+                            <div class="quote">A: {ch.get('from','')}<br>B: {ch.get('to','')}</div>
+                            <div><span class="lab">Impact</span><br>{ch.get('impact','')}</div>
+                        </div>""", unsafe_allow_html=True)
 
-                    st.markdown(f"**Overall:** {comp.get('summary', '')}")
-                    st.divider()
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown("**✅ Doc A has:**")
-                        for a in comp.get("doc_a_advantages", []):
-                            st.markdown(f"- {a}")
-                    with c2:
-                        st.markdown("**✅ Doc B has:**")
-                        for b in comp.get("doc_b_advantages", []):
-                            st.markdown(f"- {b}")
-                    st.divider()
-                    st.markdown("**Key differences:**")
-                    for d in comp.get("key_differences", []):
-                        st.markdown(f"- {d}")
-                except:
-                    st.error("Could not compare — try again.")
-
-# ── TAB 3: History ────────────────────────────────────────────────────────────
+# ---- History ----
 with tabs[2]:
     if not st.session_state.history:
-        st.info("No history yet — analyze a document to see it saved here.")
+        st.info("Your analyses from this session will show up here.")
     else:
-        st.caption(f"{len(st.session_state.history)} saved analyses")
-
+        st.caption(f"{len(st.session_state.history)} analyses this session")
         for i, item in enumerate(st.session_state.history):
-            col_title, col_delete = st.columns([9, 1])
-            with col_title:
-                with st.expander(f"📄 {item['topic']} · {item['date']}"):
-                    st.markdown(f"**Snippet:** {item['snippet']}")
-                    r = item["result"]
-                    if r.get("EXPLANATION"):
-                        st.markdown(f"**Explanation:** {r['EXPLANATION']}")
-                    if r.get("TL;DR"):
-                        st.markdown(f'<div class="tldr-box">⚡ <strong>TL;DR:</strong> {r["TL;DR"]}</div>', unsafe_allow_html=True)
-                    if item.get("flags"):
-                        st.markdown("**🚩 Flags:**")
-                        for f in item["flags"]:
-                            st.markdown(f"- {f}")
-                    if item.get("questions"):
-                        st.markdown("**❓ Questions:**")
-                        for q in item["questions"]:
-                            st.markdown(f"- {q}")
-                    if item.get("actions"):
-                        st.markdown("**✅ Action Items:**")
-                        for a in item["actions"]:
-                            st.markdown(f"- {a}")
-            with col_delete:
-                if st.button("✕", key=f"del_{item['id']}_{i}"):
-                    st.session_state.history.pop(i)
-                    st.rerun()
-
-        st.divider()
-        if st.button("🗑️ Clear all history"):
+            with st.expander(f"📄 {item['title']} · risk {item['result'].get('risk_score','?')}/100 · {item['when']}"):
+                render_result(item["result"])
+        if st.button("🗑️ Clear history"):
             st.session_state.history = []
             st.rerun()
+
+st.markdown('<div class="foot">ClearSign gives you information, not legal advice. '
+            'For high-stakes decisions, talk to a lawyer.</div>', unsafe_allow_html=True)
