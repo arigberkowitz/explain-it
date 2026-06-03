@@ -86,6 +86,15 @@ html, body, [class*="css"], .stMarkdown, label, p, span, li,
 .stTextArea textarea { background:#fff !important; border:1.5px solid #e2e8f0 !important;
         border-radius:10px !important; color:#0f172a !important; font-size:.92rem !important; }
 .stSelectbox > div > div { background:#fff !important; border:1.5px solid #e2e8f0 !important; border-radius:10px !important; }
+/* Selected value shown in the closed select */
+.stSelectbox div[data-baseweb="select"] div, .stSelectbox div[data-baseweb="select"] span { color:#0f172a !important; }
+/* Open dropdown menu (renders in a portal with a dark bg by default) */
+div[data-baseweb="popover"], div[data-baseweb="menu"], ul[role="listbox"] { background:#ffffff !important; border:1px solid #e2e8f0 !important; }
+ul[role="listbox"] li, li[role="option"] { background:#ffffff !important; color:#0f172a !important; }
+ul[role="listbox"] li:hover, li[role="option"]:hover, li[aria-selected="true"] { background:#eef2ff !important; color:#0f172a !important; }
+/* Download button readability */
+.stDownloadButton > button { background:#fff !important; color:#0f172a !important; border:1.5px solid #e2e8f0 !important; border-radius:10px !important; font-weight:600 !important; }
+.stDownloadButton > button:hover { background:#f1f5f9 !important; color:#0f172a !important; }
 
 .card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; margin-top:12px; }
 .flag-title { font-weight:700; font-size:1.02rem; margin:2px 0; color:#0f172a; }
