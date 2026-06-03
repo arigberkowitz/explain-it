@@ -95,6 +95,14 @@ ul[role="listbox"] li:hover, li[role="option"]:hover, li[aria-selected="true"] {
 /* Download button readability */
 .stDownloadButton > button { background:#fff !important; color:#0f172a !important; border:1.5px solid #e2e8f0 !important; border-radius:10px !important; font-weight:600 !important; }
 .stDownloadButton > button:hover { background:#f1f5f9 !important; color:#0f172a !important; }
+/* File uploader — was dark-on-dark by default */
+[data-testid="stFileUploader"] section, [data-testid="stFileUploaderDropzone"] {
+    background:#ffffff !important; border:1.5px dashed #cbd5e1 !important; border-radius:12px !important; }
+[data-testid="stFileUploader"] section *, [data-testid="stFileUploaderDropzone"] * { color:#475569 !important; }
+[data-testid="stFileUploaderDropzone"] button, [data-testid="stBaseButton-secondary"] {
+    background:#eef2ff !important; color:#4f46e5 !important; border:1px solid #c7d2fe !important;
+    border-radius:8px !important; font-weight:600 !important; width:auto !important; }
+[data-testid="stFileUploaderDropzone"] button:hover { background:#e0e7ff !important; color:#4338ca !important; }
 
 .card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; margin-top:12px; }
 .flag-title { font-weight:700; font-size:1.02rem; margin:2px 0; color:#0f172a; }
